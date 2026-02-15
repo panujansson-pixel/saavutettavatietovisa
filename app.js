@@ -1,9 +1,8 @@
-/* app.js — korjattu ja käyttövalmis
-  - Poistaa rekursiiviset audio-wrapperit
-  - Estää näppäinkomennot kun TTS on käynnissä (isSpeaking)
-  - Estää toistuvat keydown-tapahtumat (e.repeat)
-  - Debounce navigaatioon (200 ms)
-  - Automaattinen lataus quiz_pack_300.json jos saatavilla
+/* app.js — Behavior update:
+   - Kysymys luetaan kokonaan ensin
+   - Vaihtoehdot luetaan ja niillä soi ääni vain, kun niihin siirrytään
+   - Ääni (sustain) jatkuu niin kauan kuin vaihtoehto on valittuna
+   - Aiemmat parannukset: isSpeaking, debounce, e.repeat
 */
 (() => {
   const $ = sel => document.querySelector(sel);
@@ -12,42 +11,81 @@
   let isSpeaking = false;
   let lastNavTime = 0;
 
-  // Speech helper (sets isSpeaking onstart/onend)
-  const speak = (text, lang='fi-FI', rate=1.0) => {
+  // speech helper (sets isSpeaking)
+  const speak = (text, lang='fi-FI', rate=1.0, onend=null) => {
     try {
-      if (!window.speechSynthesis) return;
+      if (!window.speechSynthesis) {
+        if (onend) onend();
+        return;
+      }
       const u = new SpeechSynthesisUtterance(text);
       u.lang = lang;
       u.rate = rate;
       u.onstart = () => { isSpeaking = true; };
-      u.onend = () => { isSpeaking = false; };
-      u.onerror = () => { isSpeaking = false; };
+      u.onend = () => { isSpeaking = false; if (onend) onend(); };
+      u.onerror = () => { isSpeaking = false; if (onend) onend(); };
       window.speechSynthesis.speak(u);
     } catch (e) {
       isSpeaking = false;
+      if (onend) onend();
     }
   };
 
-  // WebAudio safe tone generator
+  // WebAudio tone generator + sustain oscillator for selection
   const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  function playTone(freq, dur=0.18, type='sine', gain=0.2) {
+  let currentOsc = null;
+  let currentGain = null;
+
+  function startSustainTone(freq=440, gainVal=0.08) {
+    stopSustainTone();
+    try {
+      // create oscillator and gain
+      currentOsc = audioCtx.createOscillator();
+      currentGain = audioCtx.createGain();
+      currentOsc.type = 'sine';
+      currentOsc.frequency.value = freq;
+      currentGain.gain.value = gainVal;
+      currentOsc.connect(currentGain);
+      currentGain.connect(audioCtx.destination);
+      // smooth attack
+      currentGain.gain.setValueAtTime(0, audioCtx.currentTime);
+      currentGain.gain.linearRampToValueAtTime(gainVal, audioCtx.currentTime + 0.04);
+      currentOsc.start();
+    } catch (e) {
+      // ignore if audio not allowed
+      stopSustainTone();
+    }
+  }
+
+  function stopSustainTone() {
+    try {
+      if (currentGain) {
+        // smooth release
+        currentGain.gain.cancelScheduledValues(audioCtx.currentTime);
+        currentGain.gain.setValueAtTime(currentGain.gain.value, audioCtx.currentTime);
+        currentGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.03);
+      }
+      if (currentOsc) {
+        const o = currentOsc;
+        setTimeout(() => { try { o.stop(); o.disconnect(); } catch(e) {} }, 50);
+      }
+    } catch (e) {}
+    currentOsc = null;
+    currentGain = null;
+  }
+
+  // short feedback tones
+  function playShortTone(freq, dur=0.12, vol=0.12) {
     try {
       const o = audioCtx.createOscillator();
       const g = audioCtx.createGain();
-      o.type = type;
-      o.frequency.value = freq;
-      g.gain.value = gain;
+      o.type = 'sine'; o.frequency.value = freq;
+      g.gain.value = vol;
       o.connect(g); g.connect(audioCtx.destination);
       o.start();
-      setTimeout(() => {
-        try { o.stop(); o.disconnect(); g.disconnect(); } catch(e) {}
-      }, Math.max(1, dur * 1000));
-    } catch(e) {}
+      setTimeout(()=>{ try { o.stop(); o.disconnect(); g.disconnect(); } catch(e){} }, Math.max(1, dur*1000));
+    } catch(e){}
   }
-  // named tones (call these directly)
-  const playTickTone = () => playTone(1200, 0.07, 'sine', 0.12);
-  const playCorrectTone = () => playTone(880, 0.15, 'sine', 0.25);
-  const playWrongTone = () => playTone(220, 0.33, 'sine', 0.25);
 
   // App state
   let state = {
@@ -98,20 +136,18 @@
 
   function getThemeById(id){ return state.themes.find(t => t.id === id); }
 
-  // Speak question
-  function speakQuestion(q){
+  // SPEAK QUESTION ONLY (no options)
+  function speakQuestion(q, onComplete){
     const langTag = languageSelect.value === 'fi' ? 'fi-FI' : 'en-US';
-    speak((languageSelect.value === 'fi' ? 'Kysymys: ' : 'Question: ') + q.questionText, langTag, 0.95);
-    q.options.forEach((opt, idx) => {
-      setTimeout(() => {
-        speak((languageSelect.value === 'fi' ? 'Vaihtoehto ' : 'Option ') + (idx+1) + '. ' + opt, langTag, 0.95);
-      }, 700 + idx * 600);
-    });
+    // speak question; set onComplete to callback when question reading finished
+    speak((languageSelect.value === 'fi' ? 'Kysymys: ' : 'Question: ') + q.questionText, langTag, 0.95, onComplete);
   }
 
-  // Render question UI
+  // Render question UI (no option speech here)
   function renderQuestion(){
     const q = state.currentQuestions[state.currentIndex];
+    // stop any existing sustain
+    stopSustainTone();
     if (!q) {
       questionTextEl.textContent = '';
       optionsEl.innerHTML = '';
@@ -128,23 +164,53 @@
       btn.textContent = `${idx+1}. ${opt}`;
       btn.dataset.index = idx;
       btn.setAttribute('aria-selected', state.selectedOption === idx ? 'true' : 'false');
+      // click -> select and speak option + sustain
       btn.onclick = () => {
-        state.selectedOption = idx;
-        updateOptionSelection();
-        speakOption(idx, opt);
+        if (isSpeaking) return; // block if question is still being read
+        selectOption(idx, true);
       };
-      btn.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); btn.click(); } };
+      // keyboard inside option button (Enter/Space = confirm selection)
+      btn.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectOption(idx, true); } };
       optionsEl.appendChild(btn);
     });
-    state.selectedOption = state.selectedOption !== null ? state.selectedOption : null;
+    state.selectedOption = null; // no option selected initially
     updateOptionSelection();
-    speakQuestion(q);
+    // First: read the question; only after question reading completes user may navigate
+    speakQuestion(q, () => {
+      // after question read complete: give short info or do nothing; user can now press arrows
+      // optionally play a short tone to indicate navigation enabled
+      playShortTone(660,0.08,0.08);
+    });
     updateScore();
   }
 
-  function speakOption(idx, opt){
-    const langTag = languageSelect.value === 'fi' ? 'fi-FI' : 'en-US';
-    speak((languageSelect.value === 'fi' ? 'Valitsit vaihtoehdon ' : 'Selected option ') + (idx+1) + '. ' + opt, langTag, 1.0);
+  // When selecting an option (idx). speakOpt = whether to run TTS for this option
+  function selectOption(idx, speakOpt=true){
+    // stop previous sustain
+    stopSustainTone();
+    state.selectedOption = idx;
+    updateOptionSelection();
+    // speak option text once and start sustain tone for as long as selected
+    const q = state.currentQuestions[state.currentIndex];
+    if (!q) return;
+    const optText = q.options[idx];
+    const baseFreq = 400 + (idx * 60); // simple mapping: different pitch per option
+    // speak the option label and content
+    if (speakOpt) {
+      speak((languageSelect.value === 'fi' ? 'Vaihtoehto ' : 'Option ') + (idx+1) + '. ' + optText, languageSelect.value === 'fi' ? 'fi-FI' : 'en-US', 0.95);
+    }
+    // start sustain tone (so long as selection remains)
+    // small delay to avoid audio policy block: user interacted (arrow/ click) so play should be allowed
+    try {
+      startSustainTone(baseFreq, 0.06);
+    } catch (e) {}
+  }
+
+  function speakOptionOnce(idx) {
+    const q = state.currentQuestions[state.currentIndex];
+    if (!q) return;
+    const optText = q.options[idx];
+    speak((languageSelect.value === 'fi' ? 'Vaihtoehto ' : 'Option ') + (idx+1) + '. ' + optText, languageSelect.value === 'fi' ? 'fi-FI' : 'en-US', 0.95);
   }
 
   function updateOptionSelection(){
@@ -169,6 +235,8 @@
 
   // Game controls
   function startGame(){
+    // ensure audio context is resumed on user interaction (some browsers require resume)
+    try { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); } catch(e){}
     state.language = languageSelect.value;
     state.difficulty = difficultySelect.value;
     state.selectedThemeId = themeSelect.value;
@@ -195,20 +263,24 @@
       speak(languageSelect.value === 'fi' ? 'Et valinnut vaihtoehtoa' : 'No option selected', languageSelect.value === 'fi' ? 'fi-FI' : 'en-US');
       return;
     }
+    // stop sustain while confirming
+    stopSustainTone();
     if (state.selectedOption === q.correctIndex) {
       state.score++;
-      try { playCorrectTone(); } catch(e) {}
+      playShortTone(880,0.12,0.14);
       speakLocalized('Oikein!', 'Correct!');
     } else {
-      try { playWrongTone(); } catch(e) {}
+      playShortTone(220,0.18,0.14);
       speakLocalized('Väärin. Oikea vastaus oli', 'Wrong. Correct answer was');
       speak(q.options[q.correctIndex], languageSelect.value === 'fi' ? 'fi-FI' : 'en-US');
     }
     stopTimer();
-    setTimeout(() => nextQuestion(), 800);
+    setTimeout(() => nextQuestion(), 900);
   }
 
   function nextQuestion(){
+    // ensure any sustain is stopped
+    stopSustainTone();
     state.currentIndex++;
     state.selectedOption = null;
     if (state.currentIndex >= state.currentQuestions.length) {
@@ -235,10 +307,10 @@
     state.timer = setInterval(() => {
       state.timeRemaining--;
       if (state.timeRemaining <= 3 && state.timeRemaining > 0) {
-        try { playTickTone(); } catch(e) {}
+        playShortTone(1200,0.07,0.10);
         const n = state.timeRemaining;
-        if (lang === 'fi') { const words = ['yksi', 'kaksi', 'kolme']; speak(words[n-1] || String(n), 'fi-FI', 0.8); }
-        else { const words = ['one', 'two', 'three']; speak(words[n-1] || String(n), 'en-US', 0.8); }
+        if (lang === 'fi') { const words = ['yksi','kaksi','kolme']; speak(words[n-1] || String(n), 'fi-FI', 0.8); }
+        else { const words = ['one','two','three']; speak(words[n-1] || String(n), 'en-US', 0.8); }
       } else if (state.timeRemaining <= 0) {
         stopTimer();
         speakLocalized('Aika loppui', 'Time\'s up');
@@ -351,14 +423,17 @@
   $('#nextOpt').onclick = () => {
     const q = state.currentQuestions[state.currentIndex];
     if (!q) return;
-    state.selectedOption = (state.selectedOption === null) ? 0 : Math.min(q.options.length - 1, state.selectedOption + 1);
-    updateOptionSelection();
+    // only allow navigation when question reading finished (isSpeaking false)
+    if (isSpeaking) return;
+    const nextIdx = (state.selectedOption === null) ? 0 : Math.min(q.options.length - 1, state.selectedOption + 1);
+    selectOption(nextIdx, true);
   };
   $('#prevOpt').onclick = () => {
     const q = state.currentQuestions[state.currentIndex];
     if (!q) return;
-    state.selectedOption = (state.selectedOption === null) ? 0 : Math.max(0, state.selectedOption - 1);
-    updateOptionSelection();
+    if (isSpeaking) return;
+    const prevIdx = (state.selectedOption === null) ? 0 : Math.max(0, state.selectedOption - 1);
+    selectOption(prevIdx, true);
   };
 
   importBtn.onclick = () => fileInput.click();
@@ -371,8 +446,8 @@
   helpBtn.onclick = () => {
     const lang = languageSelect.value;
     const helpText = lang === 'fi'
-      ? 'Ohje: Valitse teema, paina Aloita. Käytä nuolinäppäimiä valitaksesi vaihtoehdon ja Enter vahvistaaksesi. Editorissa voit liittää kysymyksiä muodossa Kysymys|opt1;opt2;opt3|0.'
-      : 'Help: choose theme, press Start. Use arrows to select option and Enter to confirm. Editor accepts lines of format Question|opt1;opt2;opt3|0';
+      ? 'Ohje: Valitse teema, paina Aloita. Vaihtoehdot luetaan yksitellen nuolilla siirtyessä. Paina Enter vahvistaaksesi.'
+      : 'Help: choose theme, press Start. Options are read when you move to them with arrows. Press Enter to confirm.';
     speak(helpText, lang === 'fi' ? 'fi-FI' : 'en-US', 0.95);
     statusEl.textContent = helpText;
   };
@@ -389,13 +464,13 @@
     // block repeated keydown events from holding key
     if (e.repeat) { e.preventDefault(); return; }
 
-    // block navigation while TTS is speaking
+    // block navigation while question TTS is speaking
     if (isSpeaking) {
       e.preventDefault();
       return;
     }
 
-    // debounce quick presses
+    // debounce
     const now = Date.now();
     if (now - lastNavTime < 200) { e.preventDefault(); return; }
     lastNavTime = now;
@@ -412,7 +487,8 @@
       $('#prevOpt').click();
     }
     else if (e.key === 'Enter') {
-      if (optionsEl.children.length > 0) { $('#confirmBtn').click(); }
+      // confirm only if an option is selected
+      if (state.selectedOption !== null) { $('#confirmBtn').click(); }
     }
   });
 
