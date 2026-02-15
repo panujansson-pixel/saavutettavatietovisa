@@ -254,3 +254,25 @@ html,body{
   overflow:hidden;clip:rect(1px,1px,1px,1px);
   white-space:nowrap;border:0;padding:0;margin:-1px;
 }
+/* Loppuanimaatiot – lisää styles.css:n loppuun */
+
+@keyframes flashSuccess {
+  0% { box-shadow: 0 0 0 rgba(0,0,0,0); transform: scale(1); }
+  20% { box-shadow: 0 0 40px rgba(58,227,116,0.14); transform: scale(1.01); }
+  50% { box-shadow: 0 0 60px rgba(58,227,116,0.18); transform: scale(1.02); }
+  100% { box-shadow: 0 0 0 rgba(0,0,0,0); transform: scale(1); }
+}
+@keyframes flashFail {
+  0% { box-shadow: 0 0 0 rgba(0,0,0,0); transform: scale(1); }
+  20% { box-shadow: 0 0 40px rgba(255,107,107,0.14); transform: scale(1.01); }
+  50% { box-shadow: 0 0 60px rgba(255,107,107,0.18); transform: scale(1.02); }
+  100% { box-shadow: 0 0 0 rgba(0,0,0,0); transform: scale(1); }
+}
+.question-card.flash-correct {
+  animation: flashSuccess 0.7s ease forwards;
+  border-color: rgba(58,227,116,0.25);
+}
+.question-card.flash-wrong {
+  animation: flashFail 0.9s ease forwards;
+  border-color: rgba(255,107,107,0.25);
+}
