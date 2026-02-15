@@ -1,14 +1,17 @@
-/* app.js (korjattu)
-Accessible quiz SPA (no backend). Korjattu teemojen lataus ja näppäinkäsittely.
+/* app.js (korjattu audio-wrappers + teemojen lataus)
+Accessible quiz SPA (no backend). Korjattu ääniwrapperit ja pienet bugit.
 */
 (() => {
   const $ = sel => document.querySelector(sel);
+
   const speak = (text, lang='fi-FI', rate=1.0) => {
-    if (!window.speechSynthesis) return;
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = lang;
-    u.rate = rate;
-    window.speechSynthesis.speak(u);
+    try {
+      if (!window.speechSynthesis) return;
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = lang;
+      u.rate = rate;
+      window.speechSynthesis.speak(u);
+    } catch (e) { /* ignore */ }
   };
 
   const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -20,12 +23,14 @@ Accessible quiz SPA (no backend). Korjattu teemojen lataus ja näppäinkäsittel
       g.gain.value = gain;
       o.connect(g); g.connect(audioCtx.destination);
       o.start();
-      setTimeout(()=>{ o.stop(); o.disconnect(); g.disconnect(); }, dur*1000);
+      setTimeout(()=>{ try{ o.stop(); o.disconnect(); g.disconnect(); } catch(e){} }, Math.max(1, dur*1000));
     } catch(e){}
   }
-  const playTick = () => playTone(1200,0.07,'sine',0.12);
-  const playCorrect = () => playTone(880,0.15,'sine',0.25);
-  const playWrong = () => playTone(220,0.33,'sine',0.25);
+
+  // simple named tones (use playTone, avoid accidental recursion)
+  const playTickTone = () => playTone(1200,0.07,'sine',0.12);
+  const playCorrectTone = () => playTone(880,0.15,'sine',0.25);
+  const playWrongTone = () => playTone(220,0.33,'sine',0.25);
 
   let state = {
     themes: [],
@@ -40,7 +45,7 @@ Accessible quiz SPA (no backend). Korjattu teemojen lataus ja näppäinkäsittel
     timeRemaining: 0
   };
 
-  // DOM
+  // DOM refs
   const themeSelect = $('#themeSelect');
   const startBtn = $('#startBtn');
   const editorBtn = $('#editorBtn');
@@ -60,7 +65,7 @@ Accessible quiz SPA (no backend). Korjattu teemojen lataus ja näppäinkäsittel
   const editorTextarea = $('#editorTextarea');
   const fileInput = $('#fileInput');
 
-  // render themes into select
+  // render theme select
   function renderThemeOptions(){
     themeSelect.innerHTML = '';
     state.themes.forEach(t => {
@@ -69,7 +74,6 @@ Accessible quiz SPA (no backend). Korjattu teemojen lataus ja näppäinkäsittel
       opt.textContent = t.name;
       themeSelect.appendChild(opt);
     });
-    // ensure selectedThemeId is set
     if (!state.selectedThemeId && state.themes.length) state.selectedThemeId = state.themes[0].id;
     themeSelect.value = state.selectedThemeId || (state.themes[0] && state.themes[0].id) || '';
   }
@@ -106,10 +110,8 @@ Accessible quiz SPA (no backend). Korjattu teemojen lataus ja näppäinkäsittel
       btn.onkeydown = (e) => { if (e.key==='Enter' || e.key===' ') { e.preventDefault(); btn.click(); } };
       optionsEl.appendChild(btn);
     });
-    // set initial selection null
     state.selectedOption = state.selectedOption !== null ? state.selectedOption : null;
     updateOptionSelection();
-    // speak
     speakQuestion(q);
     updateScore();
   }
@@ -128,7 +130,7 @@ Accessible quiz SPA (no backend). Korjattu teemojen lataus ja näppäinkäsittel
         btn.classList.add('selected');
         btn.style.background = '#0b84ff';
         btn.style.color = '#fff';
-        btn.focus();
+        try { btn.focus(); } catch(e){}
       } else {
         btn.classList.remove('selected');
         btn.style.background = '';
@@ -139,7 +141,7 @@ Accessible quiz SPA (no backend). Korjattu teemojen lataus ja näppäinkäsittel
 
   function updateScore(){ scoreArea.textContent = `Pisteet: ${state.score}`; }
 
-  // Game control
+  // Game
   function startGame(){
     state.language = languageSelect.value;
     state.difficulty = difficultySelect.value;
@@ -166,10 +168,10 @@ Accessible quiz SPA (no backend). Korjattu teemojen lataus ja näppäinkäsittel
     if (state.selectedOption === null) { speak(languageSelect.value==='fi' ? 'Et valinnut vaihtoehtoa' : 'No option selected', languageSelect.value==='fi' ? 'fi-FI' : 'en-US'); return; }
     if (state.selectedOption === q.correctIndex) {
       state.score++;
-      playCorrect();
+      try { playCorrectTone(); } catch(e){}
       speakLocalized('Oikein!','Correct!');
     } else {
-      playWrong();
+      try { playWrongTone(); } catch(e){}
       speakLocalized('Väärin. Oikea vastaus oli','Wrong. Correct answer was');
       speak(q.options[q.correctIndex], languageSelect.value==='fi'?'fi-FI':'en-US');
     }
@@ -201,11 +203,10 @@ Accessible quiz SPA (no backend). Korjattu teemojen lataus ja näppäinkäsittel
     const mapping = { easy:25, normal:15, hard:8 };
     state.timeRemaining = mapping[state.difficulty] || 15;
     const lang = languageSelect.value;
-    // interval
     state.timer = setInterval(()=>{
       state.timeRemaining--;
       if (state.timeRemaining <= 3 && state.timeRemaining > 0) {
-        playTick();
+        try { playTickTone(); } catch(e){}
         const n = state.timeRemaining;
         if (lang==='fi') { const words=['yksi','kaksi','kolme']; speak(words[n-1] || String(n),'fi-FI',0.8); }
         else { const words=['one','two','three']; speak(words[n-1] || String(n),'en-US',0.8); }
@@ -311,12 +312,7 @@ Accessible quiz SPA (no backend). Korjattu teemojen lataus ja näppäinkäsittel
 
   function speakLocalized(fi, en){ speak(state.language==='fi'?fi:en, state.language==='fi'?'fi-FI':'en-US', 1.0); }
 
-  // audio wrapper
-  function playCorrect(){ try{ playCorrect(); } catch(e){} }
-  function playWrong(){ try{ playWrong(); } catch(e){} }
-  function playTick(){ try{ playTick(); } catch(e){} }
-
-  // events
+  // UI events wiring
   startBtn.onclick = ()=> startGame();
   editorBtn.onclick = ()=> openEditor();
   $('#editorCloseBtn').onclick = ()=> closeEditor();
@@ -356,9 +352,8 @@ Accessible quiz SPA (no backend). Korjattu teemojen lataus ja näppäinkäsittel
   difficultySelect.onchange = ()=> { state.difficulty = difficultySelect.value; };
   themeSelect.onchange = ()=> { state.selectedThemeId = themeSelect.value; };
 
-  // keyboard
+  // keyboard handling
   window.addEventListener('keydown', (e)=>{
-    // ignore key events when typing in editor textarea or inputs
     const activeTag = document.activeElement && document.activeElement.tagName;
     if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') return;
 
@@ -375,21 +370,18 @@ Accessible quiz SPA (no backend). Korjattu teemojen lataus ja näppäinkäsittel
       e.preventDefault();
     }
     if (e.key === 'Enter') {
-      // only confirm if options are visible
       if (optionsEl.children.length > 0) {
         $('#confirmBtn').click();
       }
     }
   });
 
-  // initialization:
-  // 1) try load quiz_pack_300.json from repo root (if present)
+  // Initialization: try to load quiz_pack_300.json at repo root
   fetch('quiz_pack_300.json').then(r=>{
     if (!r.ok) throw new Error('no pack');
     return r.json();
   }).then(data=>{
     if (data.questions && Array.isArray(data.questions)) {
-      // group into themes (by theme field)
       data.questions.forEach(q=>{
         const themeName = q.theme || 'Imported';
         let theme = state.themes.find(t=>t.name===themeName);
@@ -399,27 +391,22 @@ Accessible quiz SPA (no backend). Korjattu teemojen lataus ja näppäinkäsittel
         }
         theme.questions.push({ questionText: q.questionText || q.question || '', options: q.options || [], correctIndex: q.correctIndex || 0, difficulty: q.difficulty || 'normal', source: q.source || '' });
       });
-      // persist copy so subsequent reloads can use localStorage
       localStorage.setItem('quiz_themes', JSON.stringify(state.themes));
-      // render
       renderThemeOptions();
     }
   }).catch(()=> {
-    // no pack found — fallback: check localStorage and seed minimal defaults
     const stored = localStorage.getItem('quiz_themes');
     if (stored) {
       try { state.themes = JSON.parse(stored); } catch(e){ state.themes = []; }
     }
   }).finally(()=>{
-    // If state.themes still empty, seed minimal default
     if (!state.themes || state.themes.length === 0) {
       state.themes = [
         { id: 'muumit', name: 'Muumit', questions: [ { questionText: 'Kuka on Muumipapan puoliso?', options:['Muumimamma','Niiskuneiti','Pikku Myy'], correctIndex:0, difficulty:'easy', source:'' } ] }
       ];
     }
-    // ensure selectedThemeId set and UI updated
+    // ensure UI updated
     renderThemeOptions();
-    // render initial (no active question)
     renderQuestion();
   });
 
