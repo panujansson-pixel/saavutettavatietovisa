@@ -1,9 +1,9 @@
-/* app.js — korjattu versio
- - Estetään näppäintoiminnot kun TTS on päällä (isSpeaking)
- - Estetään toistuvat keydown-tapahtumat (e.repeat)
- - Debounce navigaatioon (200 ms)
- - Äänifunktiot kutsuvat playTone-funktiota (ei rekursiota)
- - Teemojen automaattinen lataus quiz_pack_300.json:stä jos saatavilla
+/* app.js — korjattu ja käyttövalmis
+  - Poistaa rekursiiviset audio-wrapperit
+  - Estää näppäinkomennot kun TTS on käynnissä (isSpeaking)
+  - Estää toistuvat keydown-tapahtumat (e.repeat)
+  - Debounce navigaatioon (200 ms)
+  - Automaattinen lataus quiz_pack_300.json jos saatavilla
 */
 (() => {
   const $ = sel => document.querySelector(sel);
@@ -24,12 +24,11 @@
       u.onerror = () => { isSpeaking = false; };
       window.speechSynthesis.speak(u);
     } catch (e) {
-      // ensure we don't get stuck
       isSpeaking = false;
     }
   };
 
-  // WebAudio tone generator
+  // WebAudio safe tone generator
   const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   function playTone(freq, dur=0.18, type='sine', gain=0.2) {
     try {
@@ -45,7 +44,7 @@
       }, Math.max(1, dur * 1000));
     } catch(e) {}
   }
-  // safe named tones
+  // named tones (call these directly)
   const playTickTone = () => playTone(1200, 0.07, 'sine', 0.12);
   const playCorrectTone = () => playTone(880, 0.15, 'sine', 0.25);
   const playWrongTone = () => playTone(220, 0.33, 'sine', 0.25);
@@ -99,12 +98,10 @@
 
   function getThemeById(id){ return state.themes.find(t => t.id === id); }
 
-  // Speak question and its options
+  // Speak question
   function speakQuestion(q){
     const langTag = languageSelect.value === 'fi' ? 'fi-FI' : 'en-US';
-    // Speak question
     speak((languageSelect.value === 'fi' ? 'Kysymys: ' : 'Question: ') + q.questionText, langTag, 0.95);
-    // Speak options spaced a bit
     q.options.forEach((opt, idx) => {
       setTimeout(() => {
         speak((languageSelect.value === 'fi' ? 'Vaihtoehto ' : 'Option ') + (idx+1) + '. ' + opt, langTag, 0.95);
@@ -141,7 +138,6 @@
     });
     state.selectedOption = state.selectedOption !== null ? state.selectedOption : null;
     updateOptionSelection();
-    // Speak question (this sets isSpeaking)
     speakQuestion(q);
     updateScore();
   }
