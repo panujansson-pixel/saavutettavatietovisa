@@ -1,5 +1,5 @@
-/* app.js — Lisätty "Vastaus lukittu" aria-live ilmoitus
-   Poistettu sustain, mukana lukitus- ja tulosäänet, isSpeaking, debounce, e.repeat
+/* app.js — Korjattu versio (ei rekursiivisia wrappereita, "Vastaus lukittu" aria-live,
+   lukitus- + tulosäänet, estot puheen aikana, debounce, e.repeat, hitaampi siirtymä seuraavaan)
 */
 (() => {
   const $ = sel => document.querySelector(sel);
@@ -93,9 +93,7 @@
   function showTransientStatus(text, timeoutMs = 1500) {
     try {
       statusEl.textContent = text;
-      // clear after timeout (but keep if nextQuestion overwrites)
       setTimeout(()=> {
-        // only clear if text still same (avoid clearing newer messages)
         if (statusEl.textContent === text) statusEl.textContent = '';
       }, timeoutMs);
     } catch(e){}
@@ -244,8 +242,8 @@
       // update score if correct
       if (state.selectedOption === q.correctIndex) state.score++;
       stopTimer();
-      // move to next after a short pause
-      setTimeout(()=> nextQuestion(), 900);
+      // move to next after a slightly longer pause (1200ms) to ensure audio finishes
+      setTimeout(()=> nextQuestion(), 1200);
     }, 140);
   }
 
@@ -301,7 +299,7 @@
     }
   }
 
-  // Editor / import / export
+  // Editor / import / export (same logic as before)
   function openEditor(){
     editor.hidden = false;
     const theme = getThemeById(themeSelect.value) || { name: '' };
